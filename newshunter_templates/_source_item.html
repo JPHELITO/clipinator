@@ -1,0 +1,58 @@
+<div id="source-{{ s.domain_id }}" class="source-item">
+  <div class="source-header">
+    <div class="source-info">
+      <span class="source-name">{{ s.name }}</span>
+      <span class="source-badge source-badge-{{ s.type | lower }}">{{ s.type }}</span>
+      <span class="source-domain muted">{{ s.domain }}</span>
+    </div>
+    <div class="source-controls">
+      {% if s.mode == 'all' %}
+        <span class="source-status status-all">✓ Aceitar tudo</span>
+      {% elif s.mode == 'specific' %}
+        <span class="source-status status-specific">📝 {{ s.keywords | length }} keyword{{ 's' if s.keywords | length != 1 else '' }}</span>
+      {% else %}
+        <span class="source-status status-global">🌐 Keywords globais</span>
+      {% endif %}
+      <form hx-post="/sources/mode" hx-target="#source-{{ s.domain_id }}" hx-swap="outerHTML" class="inline-form">
+        <input type="hidden" name="domain" value="{{ s.domain }}">
+        <select name="mode" onchange="this.form.requestSubmit()">
+          <option value="all"      {% if s.mode == 'all'      %}selected{% endif %}>Aceitar tudo</option>
+          <option value="specific" {% if s.mode == 'specific' %}selected{% endif %}>Keywords específicas</option>
+          <option value="global"   {% if s.mode == 'global'   %}selected{% endif %}>Keywords globais</option>
+        </select>
+      </form>
+    </div>
+  </div>
+
+  {% if s.mode == 'specific' %}
+  <div class="source-kw-area">
+    <ul class="chips">
+      {% for kw in s.keywords %}
+      <li class="chip">
+        <span>{{ kw }}</span>
+        <form hx-post="/sources/keywords/remove"
+              hx-target="#source-{{ s.domain_id }}"
+              hx-swap="outerHTML"
+              class="inline">
+          <input type="hidden" name="domain" value="{{ s.domain }}">
+          <input type="hidden" name="keyword" value="{{ kw }}">
+          <button type="submit" aria-label="remover {{ kw }}">×</button>
+        </form>
+      </li>
+      {% endfor %}
+      {% if not s.keywords %}
+      <li class="chip-empty muted">Nenhuma keyword — adicione abaixo ou mude para "Keywords globais"</li>
+      {% endif %}
+    </ul>
+    <form hx-post="/sources/keywords/add"
+          hx-target="#source-{{ s.domain_id }}"
+          hx-swap="outerHTML"
+          class="add-form"
+          hx-on::after-request="this.reset()">
+      <input type="hidden" name="domain" value="{{ s.domain }}">
+      <input type="text" name="keyword" placeholder="+ nova keyword para {{ s.name }}" required>
+      <button type="submit">+</button>
+    </form>
+  </div>
+  {% endif %}
+</div>

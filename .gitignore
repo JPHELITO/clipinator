@@ -1,0 +1,42 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Cookies e perfis de browser (contêm sessão logada)
+cookies/
+chrome_profile/
+chrome_profile_*/
+chrome_profile_estadao/
+chrome_profile_itaubba/
+chrome_profile_valor/
+
+# Logs de debug
+*.log
+debug_*.log
+debug_*.py
+
+# Saida gerada
+out/
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+.pytest_cache/
+
+# IDE / ferramentas locais
+.vscode/
+.idea/
+*.swp
+.DS_Store
+.claude/
+
+# Arquivos de trabalho locais
+links.xlsx
+test_clipping.docx
+template.docx

@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Clipping — NEWS</title>
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('clipinator-theme');
+        var theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12" integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+</head>
+<body class="headlines-body clipping-body">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <strong>NEWS</strong>
+      <span class="brand-sub">S&amp;M · P&amp;P · Cement</span>
+    </div>
+    <nav class="mini-nav">
+      <a href="/">Dashboard</a>
+      <a href="/clipping" class="active" aria-current="page">Clipping</a>
+      <a href="/sources">Fontes</a>
+    </nav>
+    <div class="top-actions">
+      <span id="hspinner" class="htmx-indicator"><span class="spin-ring"></span></span>
+      <button type="button" id="theme-toggle" class="btn-link" aria-pressed="false">Modo escuro</button>
+    </div>
+  </header>
+
+  <main class="clipping-layout">
+    <section class="clipping-left">
+      <section id="headlines"
+               class="headlines-section"
+               hx-get="/clipping/scan"
+               hx-trigger="load delay:300ms, every 30s"
+               hx-swap="innerHTML"
+               hx-indicator="#hspinner">
+        {% include "_clipping_list.html" %}
+      </section>
+    </section>
+
+    <aside class="clipping-queue">
+      <div class="queue-header">
+        <h3>Selecionadas <span id="queue-count">0</span></h3>
+        <button type="button" id="clear-btn" class="btn-link">Limpar</button>
+      </div>
+      <ol id="queue-list" class="queue-list"></ol>
+      <div class="queue-empty muted" id="queue-empty">
+        Marque manchetes à esquerda. Arraste aqui para reordenar.
+      </div>
+
+      <form id="generate-form"
+            hx-post="/clipping/generate"
+            hx-target="#clip-result"
+            hx-swap="innerHTML"
+            hx-indicator="#genspinner">
+        <button type="submit" id="generate-btn" class="btn-primary" disabled>
+          Gerar Clipping
+        </button>
+        <span id="genspinner" class="htmx-indicator indicator-panel"><span class="spin-ring spin-ring-dark"></span> Gerando…</span>
+      </form>
+
+      <div id="clip-result" class="clip-result-slot"></div>
+
+      <div class="pub-section">
+        <h4 class="pub-heading">Update Reports</h4>
+        <div hx-get="/api/publications/status"
+             hx-trigger="load"
+             hx-swap="outerHTML">
+          <div id="pub-panel" class="muted">Carregando…</div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  {% include "_reader_modal.html" %}
+
+  <footer class="foot muted">
+    <small>Scan a cada 30s · janela 24h · fila salva no browser (localStorage).</small>
+  </footer>
+
+  <script src="/static/reader.js"></script>
+  <script>
+    // ------- Relógios/labels de tempo (idêntico ao headlines.html) -------
+    (function () {
+      function formatAge(iso) {
+        const then = new Date(iso);
+        if (isNaN(then.getTime())) return '';
+        const secs = Math.max(0, Math.floor((Date.now() - then.getTime()) / 1000));
+        if (secs < 60) return 'agora';
+        if (secs < 3600) return 'há ' + Math.floor(secs / 60) + ' min';
+        if (secs < 86400) return 'há ' + Math.floor(secs / 3600) + ' h';
+        return 'há ' + Math.floor(secs / 86400) + ' d';
+      }
+      function formatTimeLocal(iso) {
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+      }
+      function updateAges() {
+        document.querySelectorAll('time.age[datetime], time.hage[datetime]').forEach(el => {
+          el.textContent = formatAge(el.getAttribute('datetime'));
+        });
+      }
+      function updateExactTimes() {
+        document.querySelectorAll('time.time-exact[datetime]').forEach(el => {
+          el.textContent = formatTimeLocal(el.getAttribute('datetime'));
+        });
+      }
+      updateAges();
+      updateExactTimes();
+      setInterval(updateAges, 15000);
+      document.body.addEventListener('htmx:afterSwap', () => {
+        updateAges();
+        updateExactTimes();
+        hydrateChecks();
+        renderQueue();
+      });
+    })();
+
+    // ------- Fila (localStorage) -------
+    const QUEUE_KEY = 'clipinator-queue';
+
+    // queue = [{ url, title, source, take }]  take: '+' | '=' | '-'
+    function loadQueue() {
+      try {
+        const raw = localStorage.getItem(QUEUE_KEY);
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.filter(x => x && x.url) : [];
+      } catch (e) { return []; }
+    }
+    function saveQueue(q) {
+      try { localStorage.setItem(QUEUE_KEY, JSON.stringify(q)); } catch (e) {}
+    }
+    function inQueue(url) {
+      return loadQueue().some(x => x.url === url);
+    }
+    function addToQueue(entry) {
+      const q = loadQueue();
+      if (q.some(x => x.url === entry.url)) return;
+      q.push({ take: '=', sector: entry.sector || '', ...entry });
+      saveQueue(q);
+    }
+    function removeFromQueue(url) {
+      const q = loadQueue().filter(x => x.url !== url);
+      saveQueue(q);
+    }
+    function setTake(url, take) {
+      const q = loadQueue();
+      const item = q.find(x => x.url === url);
+      if (item) { item.take = take; saveQueue(q); renderQueue(); }
+    }
+    function setSector(url, sector) {
+      const q = loadQueue();
+      const item = q.find(x => x.url === url);
+      if (item) { item.sector = sector; saveQueue(q); renderQueue(); }
+    }
+    function clearQueue() {
+      saveQueue([]);
+    }
+
+    function hydrateChecks() {
+      // Marca os checkboxes cujas URLs já estão na fila.
+      const urls = new Set(loadQueue().map(x => x.url));
+      document.querySelectorAll('li.clip-item').forEach(li => {
+        const url = li.getAttribute('data-url');
+        const cb = li.querySelector('input.clip-check');
+        if (!cb || cb.disabled) return;
+        const should = urls.has(url);
+        if (cb.checked !== should) cb.checked = should;
+        li.classList.toggle('in-queue', should);
+      });
+    }
+
+    function renderQueue() {
+      const q = loadQueue();
+      const list = document.getElementById('queue-list');
+      const empty = document.getElementById('queue-empty');
+      const count = document.getElementById('queue-count');
+      const btn = document.getElementById('generate-btn');
+      if (!list) return;
+
+      list.innerHTML = '';
+      q.forEach((item, idx) => {
+        const take = item.take || '=';
+        const li = document.createElement('li');
+        li.className = 'queue-item';
+        li.setAttribute('data-url', item.url);
+        const sector = item.sector || '';
+        li.innerHTML = `
+          <span class="qi-num">${idx + 1}.</span>
+          <span class="drag-handle" aria-hidden="true">⠿</span>
+          <div class="qi-meta">
+            <span class="qsrc">${escapeHtml(item.source || '')}</span>
+            <div class="qi-title">${escapeHtml(item.title || item.url)}</div>
+          </div>
+          <div class="qi-controls">
+            <span class="take-selector sector-selector">
+              <button type="button" class="take-btn${sector === 'SM'     ? ' active' : ''}" data-sector="SM">S&amp;M</button>
+              <button type="button" class="take-btn${sector === 'PP'     ? ' active' : ''}" data-sector="PP">P&amp;P</button>
+              <button type="button" class="take-btn${sector === 'NR'     ? ' active' : ''}" data-sector="NR">NR</button>
+              <button type="button" class="take-btn${sector === 'CEMENT' ? ' active' : ''}" data-sector="CEMENT">CEM</button>
+            </span>
+            <span class="take-selector">
+              <button type="button" class="take-btn take-pos${take === '+' ? ' active' : ''}" data-take="+">+</button>
+              <button type="button" class="take-btn take-neu${take === '=' ? ' active' : ''}" data-take="=">=</button>
+              <button type="button" class="take-btn take-neg${take === '-' ? ' active' : ''}" data-take="−">−</button>
+            </span>
+            <button type="button" class="qremove" aria-label="Remover">×</button>
+          </div>
+        `;
+        li.querySelector('.qremove').addEventListener('click', () => {
+          removeFromQueue(item.url);
+          hydrateChecks();
+          renderQueue();
+        });
+        li.querySelectorAll('[data-sector]').forEach(btn => {
+          btn.addEventListener('click', () => setSector(item.url, btn.getAttribute('data-sector')));
+        });
+        li.querySelectorAll('.take-btn[data-take]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const rawTake = btn.getAttribute('data-take');
+            setTake(item.url, rawTake === '−' ? '-' : rawTake);
+          });
+        });
+        list.appendChild(li);
+      });
+
+      count.textContent = String(q.length);
+      if (empty) empty.style.display = q.length === 0 ? '' : 'none';
+      if (btn) btn.disabled = q.length === 0;
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    // Handler de checkbox (delegado no documento para pegar elementos recarregados por HTMX)
+    document.addEventListener('change', (ev) => {
+      const cb = ev.target;
+      if (!(cb instanceof HTMLInputElement) || !cb.classList.contains('clip-check')) return;
+      const li = cb.closest('li.clip-item');
+      if (!li) return;
+      const entry = {
+        url: li.getAttribute('data-url'),
+        title: li.getAttribute('data-title') || '',
+        source: li.getAttribute('data-source') || '',
+        sector: li.getAttribute('data-sector') || '',
+      };
+      if (cb.checked) addToQueue(entry);
+      else removeFromQueue(entry.url);
+      li.classList.toggle('in-queue', cb.checked);
+      renderQueue();
+    });
+
+    // Botão Limpar
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      clearQueue();
+      hydrateChecks();
+      renderQueue();
+    });
+
+    // SortableJS: reordenação drag-and-drop.
+    Sortable.create(document.getElementById('queue-list'), {
+      animation: 150,
+      handle: '.drag-handle',
+      ghostClass: 'sortable-ghost',
+      chosenClass: 'sortable-chosen',
+      onEnd: () => {
+        // Reordena o localStorage conforme o DOM.
+        const newUrls = Array.from(document.querySelectorAll('#queue-list li.queue-item'))
+          .map(li => li.getAttribute('data-url'));
+        const byUrl = new Map(loadQueue().map(x => [x.url, x]));
+        const reordered = newUrls.map(u => byUrl.get(u)).filter(Boolean);
+        saveQueue(reordered);
+      },
+    });
+
+    // Antes de submeter, injeta URLs, takes e sectors ordenados como parâmetros do form.
+    document.getElementById('generate-form').addEventListener('htmx:configRequest', (ev) => {
+      const q = loadQueue();
+      ev.detail.parameters = {};
+      ev.detail.parameters['urls']    = q.map(x => x.url);
+      ev.detail.parameters['takes']   = q.map(x => x.take || '=');
+      ev.detail.parameters['sectors'] = q.map(x => x.sector || '');
+    });
+
+    // Render inicial.
+    hydrateChecks();
+    renderQueue();
+
+    // ------- Tema (idêntico ao resto das páginas) -------
+    (function () {
+      const STORAGE_KEY = 'clipinator-theme';
+      const btn = document.getElementById('theme-toggle');
+      if (!btn) return;
+      function apply(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        btn.textContent = theme === 'dark' ? 'Modo claro' : 'Modo escuro';
+        btn.setAttribute('aria-pressed', String(theme === 'dark'));
+      }
+      apply(document.documentElement.getAttribute('data-theme') || 'light');
+      btn.addEventListener('click', () => {
+        const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        try { localStorage.setItem(STORAGE_KEY, next); } catch (e) {}
+        apply(next);
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+<div id="keywords-panel" class="kw-panel">
+  <ul class="chips">
+    {% for kw in keywords %}
+      <li class="chip">
+        <span>{{ kw }}</span>
+        <form hx-post="/keywords/remove" hx-target="#keywords-panel" hx-swap="outerHTML" class="inline">
+          <input type="hidden" name="keyword" value="{{ kw }}">
+          <button type="submit" aria-label="remover {{ kw }}">×</button>
+        </form>
+      </li>
+    {% endfor %}
+  </ul>
+  <form hx-post="/keywords/add" hx-target="#keywords-panel" hx-swap="outerHTML" class="add-form"
+        hx-on::after-request="this.reset()">
+    <input type="text" name="keyword" placeholder="+ adicionar palavra-chave" required>
+    <button type="submit">+</button>
+  </form>
+</div>

@@ -1,0 +1,31 @@
+<div class="clip-result {% if n_ok == 0 %}clip-result-fail{% elif n_fail > 0 %}clip-result-partial{% else %}clip-result-ok{% endif %}">
+  <div class="clip-result-head">
+    {% if n_ok == 0 %}
+      <strong>Falha total</strong> — nenhum artigo raspado.
+    {% elif n_fail > 0 %}
+      <strong>{{ n_ok }}/{{ n_total }}</strong> artigos OK · <strong>{{ n_fail }}</strong> falha{{ '' if n_fail == 1 else 's' }}
+    {% else %}
+      <strong>{{ n_ok }}/{{ n_total }}</strong> artigos OK
+    {% endif %}
+  </div>
+
+  {% if download_name %}
+    <a class="clip-download" href="/clipping/download/{{ download_name }}" download="{{ download_name }}">
+      ⇓ Baixar Word — {{ download_name }}
+    </a>
+  {% endif %}
+
+  {% if errors %}
+    <details class="clip-errors" open>
+      <summary>Falhas ({{ errors|length }})</summary>
+      <ul>
+        {% for url, msg in errors %}
+          <li>
+            <a href="{{ url }}" target="_blank" rel="noopener" class="clip-error-url">{{ url }}</a>
+            <span class="clip-error-msg">{{ msg }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+</div>

@@ -1,0 +1,15 @@
+<!-- Leitor in-dash: abre ao clicar em qualquer artigo -->
+<div id="reader-modal" role="dialog" aria-modal="true" aria-label="Leitor de artigo"
+     onclick="if(event.target===this)closeReader()">
+  <div class="reader-panel">
+    <div class="reader-topbar">
+      <button class="reader-close" onclick="closeReader()" aria-label="Fechar leitor">✕ Fechar</button>
+      <a id="reader-ext-link" href="#" target="_blank" rel="noopener" class="reader-ext-link">
+        ↗ Abrir no site original
+      </a>
+    </div>
+    <div id="reader-content">
+      <p class="reader-loading">Selecione um artigo para ler.</p>
+    </div>
+  </div>
+</div>

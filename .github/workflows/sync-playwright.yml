@@ -1,0 +1,42 @@
+name: News Sync — Playwright (30 min)
+# Roda a cada 30 minutos. Coleta todas as fontes incluindo Playwright:
+# Platts, Fastmarkets, Valor Econômico, Estadão.
+# Usa container com Playwright/Chromium pré-instalado (sem step de install).
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:   # permite rodar manualmente
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.52.0-jammy
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run full sync (Playwright)
+        env:
+          SUPABASE_URL:            ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY:    ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PLATTS_STATE_JSON:       ${{ secrets.PLATTS_STATE_JSON }}
+          FASTMARKETS_STATE_JSON:  ${{ secrets.FASTMARKETS_STATE_JSON }}
+          FASTMARKETS_CREDENTIALS: ${{ secrets.FASTMARKETS_CREDENTIALS }}
+          VALOR_STATE_JSON:        ${{ secrets.VALOR_STATE_JSON }}
+          VALOR_CREDENTIALS:       ${{ secrets.VALOR_CREDENTIALS }}
+          ESTADAO_STATE_JSON:      ${{ secrets.ESTADAO_STATE_JSON }}
+          ESTADAO_CREDENTIALS:     ${{ secrets.ESTADAO_CREDENTIALS }}
+        run: python sync_runner.py

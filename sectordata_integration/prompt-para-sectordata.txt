@@ -1,0 +1,302 @@
+Preciso adicionar um módulo "News Hunter" ao SectorData que exibe notícias de oil & gas vindas de uma tabela do Supabase, com auto-refresh de 30s.
+
+## Contexto
+
+- Tenho um scanner Python local (Clipinator) rodando 24/7 no meu PC que varre ~60 fontes de notícias (Valor, Brasil Energia, Reuters, Bloomberg, Petrobras, etc.) e faz upsert numa tabela `news_articles` do Supabase a cada 30s.
+- O scanner usa a `service_role` key (fica só no meu PC, não em lugar nenhum online).
+- O SectorData precisa ler essa tabela com a anon key já configurada + RLS e exibir as notícias.
+- Stack do scanner = Python + supabase-py; ele não vai ser alterado por você — só preciso que você monte o lado Next.js.
+
+## Restrições de free tier (importante)
+
+- **Supabase free: 5 GB egress/mês.** Use polling incremental no frontend — query `found_at > lastSeen` após o fetch inicial. Fetchar sempre as últimas 24h inteiras a cada 30s estoura o budget com poucos usuários.
+- **Vercel Hobby: 100 GB bandwidth.** Página é estática + polling vai direto para Supabase, não passa pela Vercel. Desprezível.
+- DB cresce ~30 rows/dia × 1 KB = ~1 MB/ano.
+
+## Tarefas
+
+### 1. Migration Supabase
+
+Crie `supabase/migrations/<timestamp>_news_hunter.sql` (use um timestamp posterior aos existentes, formato `YYYYMMDDHHMMSS`):
+
+```sql
+create table if not exists public.news_articles (
+  url              text primary key,
+  domain           text not null,
+  source_name      text not null,
+  title            text not null,
+  snippet          text not null default '',
+  published_at     timestamptz not null,
+  found_at         timestamptz not null default now(),
+  matched_keywords text[] not null default '{}'::text[],
+  created_at       timestamptz not null default now()
+);
+
+create index if not exists news_articles_published_at_idx
+  on public.news_articles (published_at desc);
+create index if not exists news_articles_found_at_idx
+  on public.news_articles (found_at desc);
+
+alter table public.news_articles enable row level security;
+
+drop policy if exists "authenticated read news_articles" on public.news_articles;
+create policy "authenticated read news_articles"
+  on public.news_articles
+  for select
+  to authenticated
+  using (true);
+```
+
+Writes ficam restritos a service_role (implícito — RLS bloqueia anon/authenticated INSERT/UPDATE/DELETE).
+
+### 2. Página Next.js
+
+Crie `src/app/(dashboard)/news-hunter/page.tsx`. Antes de escrever, **investigue o projeto**:
+
+- Qual é o helper de cliente Supabase no projeto? (procure `src/lib/supabase*`, `createClient`, `@supabase/ssr` ou `@supabase/supabase-js`)
+- O layout `(dashboard)` já garante auth? Se não, me avise.
+- Bootstrap ou Tailwind? Adapte as classes do meu snippet ao padrão existente.
+
+Código base (ajuste o import do Supabase para o que já existe):
+
+```tsx
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createClient } from "@/lib/supabase"; // <-- TROQUE PELO HELPER EXISTENTE
+
+type NewsArticle = {
+  url: string;
+  domain: string;
+  source_name: string;
+  title: string;
+  snippet: string;
+  published_at: string;
+  found_at: string;
+  matched_keywords: string[];
+};
+
+const WINDOW_PRESETS = [1, 3, 6, 12, 24, 48, 72, 168] as const;
+const POLL_INTERVAL_MS = 30_000;
+const PAGE_LIMIT = 500;
+
+function labelForWindow(h: number): string {
+  if (h < 24) return `${h}h`;
+  if (h === 24) return "24h (1d)";
+  if (h === 168) return "7d";
+  return `${h}h (${Math.floor(h / 24)}d)`;
+}
+
+function humanizeAge(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "sem data";
+  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (secs < 60) return "agora";
+  if (secs < 3600) return `há ${Math.floor(secs / 60)} min`;
+  if (secs < 86400) return `há ${Math.floor(secs / 3600)} h`;
+  return `há ${Math.floor(secs / 86400)} d`;
+}
+
+function stripAccents(s: string): string {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+export default function NewsHunterPage() {
+  const [articles, setArticles] = useState<NewsArticle[]>([]);
+  const [windowHours, setWindowHours] = useState<number>(24);
+  const [filter, setFilter] = useState<string>("");
+  const [loading, setLoading] = useState<boolean>(true);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const lastFoundAtRef = useRef<string | null>(null);
+  const supabase = useMemo(() => createClient(), []);
+
+  const mergeArticles = useCallback(
+    (prev: NewsArticle[], incoming: NewsArticle[]): NewsArticle[] => {
+      if (incoming.length === 0) return prev;
+      const byUrl = new Map(prev.map((a) => [a.url, a]));
+      for (const a of incoming) byUrl.set(a.url, a);
+      return Array.from(byUrl.values()).sort(
+        (a, b) =>
+          new Date(b.published_at).getTime() -
+          new Date(a.published_at).getTime(),
+      );
+    },
+    [],
+  );
+
+  const fetchInitial = useCallback(
+    async (hours: number) => {
+      setLoading(true);
+      setError(null);
+      const cutoff = new Date(Date.now() - hours * 3600 * 1000).toISOString();
+      const { data, error: err } = await supabase
+        .from("news_articles")
+        .select("*")
+        .gte("published_at", cutoff)
+        .order("published_at", { ascending: false })
+        .limit(PAGE_LIMIT);
+      if (err) { setError(err.message); setLoading(false); return; }
+      const rows = (data as NewsArticle[]) ?? [];
+      setArticles(rows);
+      setLastUpdate(new Date());
+      lastFoundAtRef.current = rows.length > 0
+        ? rows.reduce((max, r) => (r.found_at > max ? r.found_at : max), rows[0].found_at)
+        : new Date().toISOString();
+      setLoading(false);
+    },
+    [supabase],
+  );
+
+  const fetchIncremental = useCallback(async () => {
+    if (!lastFoundAtRef.current) return;
+    const { data, error: err } = await supabase
+      .from("news_articles")
+      .select("*")
+      .gt("found_at", lastFoundAtRef.current)
+      .order("found_at", { ascending: false })
+      .limit(PAGE_LIMIT);
+    if (err) { setError(err.message); return; }
+    const rows = (data as NewsArticle[]) ?? [];
+    setLastUpdate(new Date());
+    setError(null);
+    if (rows.length === 0) return;
+    lastFoundAtRef.current = rows.reduce(
+      (max, r) => (r.found_at > max ? r.found_at : max),
+      lastFoundAtRef.current!,
+    );
+    setArticles((prev) => {
+      const merged = mergeArticles(prev, rows);
+      const cutoff = Date.now() - windowHours * 3600 * 1000;
+      return merged.filter((a) => new Date(a.published_at).getTime() >= cutoff);
+    });
+  }, [supabase, mergeArticles, windowHours]);
+
+  useEffect(() => { void fetchInitial(windowHours); }, [fetchInitial, windowHours]);
+  useEffect(() => {
+    const id = setInterval(() => { void fetchIncremental(); }, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [fetchIncremental]);
+
+  const filtered = useMemo(() => {
+    const cutoff = Date.now() - windowHours * 3600 * 1000;
+    const inWindow = articles.filter((a) => new Date(a.published_at).getTime() >= cutoff);
+    const raw = filter.trim();
+    if (!raw) return inWindow;
+    const terms = stripAccents(raw.toLowerCase()).split(/\s+/).filter(Boolean);
+    return inWindow.filter((a) => {
+      const hay = stripAccents(
+        `${a.title} ${a.source_name} ${a.snippet} ${a.matched_keywords.join(" ")}`.toLowerCase(),
+      );
+      return terms.every((t) => hay.includes(t));
+    });
+  }, [articles, filter, windowHours]);
+
+  // A UI abaixo usa Bootstrap; se o projeto usa Tailwind/componentes próprios,
+  // adapte para o design system existente (cards, inputs, badges, etc.)
+  return (
+    <div className="container-fluid py-4">
+      <div className="d-flex flex-wrap align-items-center gap-3 mb-4">
+        <h1 className="h3 mb-0">News Hunter</h1>
+        <span className="text-muted small">
+          {loading ? "⏳ carregando…" : lastUpdate ? `atualizado ${humanizeAge(lastUpdate.toISOString())}` : ""}
+        </span>
+        <span className="text-muted small ms-auto">auto-refresh: 30s</span>
+      </div>
+
+      <div className="row g-3 mb-4">
+        <div className="col-md-6">
+          <input type="search" className="form-control"
+            placeholder="🔎 Filtrar (título, fonte, snippet)…"
+            value={filter} onChange={(e) => setFilter(e.target.value)} />
+        </div>
+        <div className="col-md-3">
+          <select className="form-select" value={windowHours}
+            onChange={(e) => setWindowHours(Number(e.target.value))}>
+            {WINDOW_PRESETS.map((h) => (
+              <option key={h} value={h}>Janela: {labelForWindow(h)}</option>
+            ))}
+          </select>
+        </div>
+        <div className="col-md-3 text-muted small d-flex align-items-center">
+          {filtered.length} notícia{filtered.length === 1 ? "" : "s"}
+          {filter && ` (de ${articles.length})`}
+        </div>
+      </div>
+
+      {error && <div className="alert alert-warning">Erro ao carregar: {error}</div>}
+
+      {!loading && filtered.length === 0 && (
+        <div className="alert alert-light text-center">
+          {articles.length === 0
+            ? "Nenhuma notícia ainda. Verifique se o scanner local está rodando."
+            : "Nenhuma notícia corresponde ao filtro."}
+        </div>
+      )}
+
+      <div className="row g-3">
+        {filtered.map((a) => (
+          <div key={a.url} className="col-md-6 col-lg-4">
+            <div className="card h-100 shadow-sm">
+              <div className="card-body">
+                <div className="d-flex justify-content-between align-items-start mb-2">
+                  <span className="badge bg-secondary">{a.source_name}</span>
+                  <small className="text-muted">{humanizeAge(a.published_at)}</small>
+                </div>
+                <h5 className="card-title">
+                  <a href={a.url} target="_blank" rel="noopener noreferrer" className="text-decoration-none">
+                    {a.title}
+                  </a>
+                </h5>
+                {a.snippet && <p className="card-text small text-muted">{a.snippet}</p>}
+                <div className="mt-2">
+                  {a.matched_keywords.map((kw) => (
+                    <span key={kw} className="badge bg-primary-subtle text-primary-emphasis me-1 mb-1">{kw}</span>
+                  ))}
+                </div>
+              </div>
+              <div className="card-footer bg-transparent">
+                <a href={a.url} target="_blank" rel="noopener noreferrer" className="small">🔗 abrir matéria</a>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+### 3. Navegação e home
+
+- Encontre a home do dashboard (provavelmente `src/app/(dashboard)/home/page.tsx`) e adicione um card "News Hunter" seguindo o MESMO padrão dos módulos existentes (sales-volumes, navios-diesel, market-share). Use o componente `<ModuleCard>` ou equivalente se existir — não reinvente.
+- Se houver sidebar/nav central, adicione a entrada lá também.
+- Se o projeto tem `module_visibility` (tabela do Supabase que gateia módulos), insira uma row para `news_hunter` com `visible_to_all = true` (ou o padrão que ele usa). Cheque `src/lib/rpc.ts` e `CLAUDE.md` do projeto para o padrão.
+
+### 4. Não faça
+
+- **Não** crie um novo helper de Supabase client — use o que já existe no projeto.
+- **Não** exponha a `service_role` key no frontend nem commit o `.env` da Vercel. O frontend só precisa da anon key (já configurada).
+- **Não** mude o schema RPC existente. Essa feature não toca `vendas`, `navios_diesel`, etc.
+- **Não** escreva back-end para scraping — o scanner Python roda no meu PC e é mantido fora daqui.
+
+## Verificação
+
+1. Rode a migration (via `supabase db push` se o CI auto-deploy estiver configurado, ou manualmente no SQL Editor).
+2. Confirme no Table Editor que `news_articles` existe e RLS está ativo.
+3. Build local passa: `npm run build`.
+4. Teste na preview do Vercel (ou local com `npm run dev`):
+   - `/news-hunter` carrega sem console errors.
+   - DevTools Network mostra chamadas para `/rest/v1/news_articles` a cada 30s após o load inicial.
+   - Se a tabela está vazia (scanner ainda não rodou), a UI mostra "Nenhuma notícia ainda. Verifique se o scanner local está rodando." — isso é esperado.
+
+## Entregáveis
+
+Crie uma branch `feat/news-hunter` e abra um PR com:
+- A migration SQL
+- O `page.tsx`
+- Alterações na home + nav
+- Qualquer row necessária em `module_visibility`
+
+Me avise se algum dos padrões do projeto (helper Supabase, estrutura de home, sistema de módulos) diverge do que assumi acima — adaptar é bem-vindo, só mantenha a query incremental (`found_at > lastSeen`) e o polling de 30s para respeitar o budget Supabase.

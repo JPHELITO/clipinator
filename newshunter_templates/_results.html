@@ -1,0 +1,60 @@
+<section id="results" class="results"
+         hx-get="/scan"
+         hx-trigger="every 30s"
+         hx-swap="outerHTML"
+         hx-target="this">
+  <div class="results-header">
+    <h3>
+      <strong class="count">{{ articles|length }}</strong> notícia{{ '' if articles|length == 1 else 's' }}
+      <span class="muted">· janela: {{ window_hours }}h</span>
+      <span id="filter-counter" class="muted"></span>
+    </h3>
+    <div class="muted">
+      {% if last_run %}
+        Última busca: <time class="age" datetime="{{ last_run.started_at.isoformat() }}">{{ last_run_age }}</time>
+        {% if last_run.n_found is not none %}· {{ last_run.n_found }} itens{% endif %}
+        {% if last_run.errors %}<span class="warn" title="{{ last_run.errors|length }} erros">⚠ {{ last_run.errors|length }} erros</span>{% endif %}
+      {% else %}
+        Ainda não houve busca — clique em <strong>🔍 Buscar agora</strong>.
+      {% endif %}
+    </div>
+  </div>
+
+  {% if search_stats %}
+    <div class="flash">
+      ✓ Busca concluída: {{ search_stats.n_new }} nov{{ 'a' if search_stats.n_new == 1 else 'as' }},
+      {{ search_stats.n_total }} total
+      {% if search_stats.errors %}· {{ search_stats.errors|length }} erros{% endif %}
+    </div>
+  {% endif %}
+
+  {% if not articles %}
+    <div class="empty">
+      <p>Nenhuma notícia encontrada nesta janela com as keywords atuais.</p>
+      <p class="muted">Tente aumentar a janela ou adicionar palavras-chave.</p>
+    </div>
+  {% else %}
+    <ul class="cards">
+      {% for a in articles %}
+        <li class="card" data-search="{{ (a.title ~ ' ' ~ a.source_name ~ ' ' ~ a.snippet ~ ' ' ~ (a.matched_keywords | join(' ')))|lower }}">
+          <div class="card-head">
+            <span class="source">{{ a.source_name }}</span>
+            {% if a.published_at %}<time class="card-time age" datetime="{{ a.published_at.isoformat() }}">{{ humanize(a.published_at) }}</time>{% else %}<span class="card-time">sem data</span>{% endif %}
+          </div>
+          <h4 class="title">
+            <a class="article-link" href="{{ a.url }}"
+               data-reader-url="{{ a.url }}"
+               onclick="openReader(event, this)">{{ a.title }}</a>
+          </h4>
+          <p class="snippet">{{ a.snippet }}</p>
+          <div class="card-foot">
+            {% for kw in a.matched_keywords %}
+              <span class="tag">{{ kw }}</span>
+            {% endfor %}
+            <a class="open" href="{{ a.url }}" target="_blank" rel="noopener">↗ original</a>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</section>

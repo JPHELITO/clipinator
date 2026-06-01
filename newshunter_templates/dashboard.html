@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NEWS S&M, P&P and Cement</title>
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem('clipinator-theme');
+        var theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12" integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2" crossorigin="anonymous"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <strong>NEWS</strong>
+      <span class="brand-sub">S&amp;M · P&amp;P · Cement</span>
+    </div>
+    <nav class="mini-nav">
+      <a href="/" class="active" aria-current="page">Dashboard</a>
+      <a href="/clipping">Clipping</a>
+      <a href="/sources">Fontes</a>
+    </nav>
+    <div class="top-actions">
+      <input
+        type="search"
+        id="filter-input"
+        class="filter-input"
+        placeholder="Filtrar notícias…"
+        autocomplete="off"
+        aria-label="Filtrar notícias">
+
+      <form hx-post="/search" hx-target="#results" hx-swap="outerHTML" hx-indicator="#spinner"
+            title="Busca janela maior com o período selecionado.">
+        <input type="hidden" name="window" value="{{ window_hours }}">
+        <button type="submit" class="btn-primary">Buscar</button>
+      </form>
+      <span id="spinner" class="htmx-indicator"><span class="spin-ring"></span></span>
+
+      <form hx-post="/config/window" hx-target="#results" hx-swap="outerHTML" class="inline-form">
+        <label>Janela</label>
+        <select name="window_hours" onchange="this.form.requestSubmit()">
+          {% for h in window_presets %}
+            <option value="{{ h }}" {% if h == window_hours %}selected{% endif %}>
+              {% if h < 24 %}{{ h }}h{% elif h == 24 %}24h{% elif h == 168 %}7d{% else %}{{ (h // 24) }}d{% endif %}
+            </option>
+          {% endfor %}
+        </select>
+      </form>
+
+      <button type="button" id="theme-toggle" class="btn-link" aria-pressed="false">Modo escuro</button>
+    </div>
+  </header>
+
+  <!-- Alertas de sessão expirada — polling a cada 60s -->
+  <div id="session-alerts-container"
+       hx-get="/api/session-alerts"
+       hx-trigger="load, every 60s"
+       hx-swap="innerHTML">
+  </div>
+
+  {% include "_results.html" %}
+
+  {% include "_reader_modal.html" %}
+
+  <footer class="foot muted">
+    <small>NEWS · Platts · Fastmarkets · Valor Econômico · Mining.com · El Financiero · retenção 72h.</small>
+  </footer>
+
+  <script src="/static/reader.js"></script>
+  <script>
+    (function () {
+      // Atualiza labels de tempo relativo ("agora", "há 5 min", etc.) com base
+      // no relogio do cliente. O servidor envia ISO 8601 em datetime="...".
+      function formatAge(iso) {
+        const then = new Date(iso);
+        if (isNaN(then.getTime())) return '';
+        const secs = Math.max(0, Math.floor((Date.now() - then.getTime()) / 1000));
+        if (secs < 60) return 'agora';
+        if (secs < 3600) return 'há ' + Math.floor(secs / 60) + ' min';
+        if (secs < 86400) return 'há ' + Math.floor(secs / 3600) + ' h';
+        return 'há ' + Math.floor(secs / 86400) + ' d';
+      }
+      function updateAges() {
+        document.querySelectorAll('time.age[datetime]').forEach(el => {
+          el.textContent = formatAge(el.getAttribute('datetime'));
+        });
+      }
+      updateAges();
+      setInterval(updateAges, 30000);
+      document.body.addEventListener('htmx:afterSwap', updateAges);
+    })();
+
+    (function () {
+      const input = document.getElementById('filter-input');
+      if (!input) return;
+
+      function stripAccents(s) {
+        return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      }
+
+      function applyFilter() {
+        const raw = input.value.trim();
+        const q = stripAccents(raw.toLowerCase());
+        const terms = q.split(/\s+/).filter(Boolean);
+        const cards = document.querySelectorAll('#results .card');
+        let visible = 0;
+        cards.forEach(card => {
+          const hay = stripAccents(card.dataset.search || '');
+          const match = terms.length === 0 || terms.every(t => hay.includes(t));
+          card.style.display = match ? '' : 'none';
+          if (match) visible++;
+        });
+
+        const counter = document.getElementById('filter-counter');
+        const header = document.querySelector('#results .results-header h3');
+        if (counter && header) {
+          const total = cards.length;
+          if (terms.length === 0) {
+            counter.textContent = '';
+          } else {
+            counter.textContent = `— mostrando ${visible} de ${total}`;
+          }
+        }
+
+        let empty = document.getElementById('filter-empty');
+        if (terms.length > 0 && visible === 0 && cards.length > 0) {
+          if (!empty) {
+            empty = document.createElement('div');
+            empty.id = 'filter-empty';
+            empty.className = 'empty';
+            empty.innerHTML = '<p>Nenhuma notícia corresponde ao filtro.</p><p class="muted">Limpe a barra de busca para ver tudo.</p>';
+            const results = document.getElementById('results');
+            if (results) results.appendChild(empty);
+          }
+        } else if (empty) {
+          empty.remove();
+        }
+      }
+
+      input.addEventListener('input', applyFilter);
+
+      // Reaplica o filtro depois que HTMX trocar a lista (/search, /config/window).
+      document.body.addEventListener('htmx:afterSwap', applyFilter);
+
+      applyFilter();
+    })();
+
+    (function () {
+      const STORAGE_KEY = 'clipinator-theme';
+      const btn = document.getElementById('theme-toggle');
+      if (!btn) return;
+      function apply(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        btn.textContent = theme === 'dark' ? 'Modo claro' : 'Modo escuro';
+        btn.setAttribute('aria-pressed', String(theme === 'dark'));
+      }
+      apply(document.documentElement.getAttribute('data-theme') || 'light');
+      btn.addEventListener('click', () => {
+        const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        try { localStorage.setItem(STORAGE_KEY, next); } catch (e) {}
+        apply(next);
+      });
+    })();
+  </script>
+</body>
+</html>

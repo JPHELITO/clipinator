@@ -1,0 +1,51 @@
+<div class="headlines-meta">
+  <span class="count">{{ articles|length }} notícia{{ '' if articles|length == 1 else 's' }}</span>
+  <span class="sep">·</span>
+  <span class="muted">últimas {{ window_hours }}h</span>
+  {% if last_run %}
+    <span class="sep">·</span>
+    <span class="muted">último scan <time class="age" datetime="{{ last_run.started_at.isoformat() }}">{{ last_run_age }}</time></span>
+  {% endif %}
+  {% if scan_stats and scan_stats.get('skipped') %}
+    <span class="sep">·</span>
+    <span class="muted skipped" title="scan pulado: {{ scan_stats.get('reason', '') }}">(scan pulado)</span>
+  {% elif scan_stats and scan_stats.get('n_new', 0) > 0 %}
+    <span class="sep">·</span>
+    <span class="flash-inline">+{{ scan_stats.n_new }} nov{{ 'a' if scan_stats.n_new == 1 else 'as' }}</span>
+  {% endif %}
+</div>
+
+{% if not articles %}
+  <div class="empty">
+    <p>Ainda sem notícias nesta janela.</p>
+    <p class="muted">Aguarde o primeiro scan completar (~5–10s).</p>
+  </div>
+{% else %}
+  <ul class="headlines clipping-headlines">
+    {% for a, is_supported in articles %}
+      <li class="headline clip-item"
+          data-url="{{ a.url }}"
+          data-title="{{ a.title }}"
+          data-source="{{ a.source_name }}"
+          data-sector="{% if a.domain == 'core.spglobal.com' %}SM{% elif a.domain == 'dashboard.fastmarkets.com' %}PP{% elif a.domain == 'www.mining.com' %}SM{% elif a.domain == 'www.elfinanciero.com.mx' %}CEMENT{% endif %}">
+        <label class="clip-check-wrap">
+          <input type="checkbox"
+                 class="clip-check"
+                 value="{{ a.url }}">
+        </label>
+        <span class="htime">{% if a.published_at %}<time class="time-exact" datetime="{{ a.published_at.isoformat() }}">{{ a.published_at.strftime('%H:%M') }}</time>{% else %}--:--{% endif %}</span>
+        <a class="hlink article-link" href="{{ a.url }}"
+           data-reader-url="{{ a.url }}"
+           onclick="openReader(event, this)">
+          <span class="hsrc">{{ a.source_name }}:</span>
+          <span class="htitle">{{ a.title }}</span>
+        </a>
+        {% if a.published_at %}
+          <time class="hage" datetime="{{ a.published_at.isoformat() }}">{{ humanize(a.published_at) }}</time>
+        {% else %}
+          <span class="hage muted">—</span>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{% endif %}
