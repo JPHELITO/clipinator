@@ -4,9 +4,10 @@ name: News Sync — Playwright (30 min)
 # Usa container com Playwright/Chromium pré-instalado (sem step de install).
 
 on:
-  schedule:
-    - cron: "*/30 * * * *"
-  workflow_dispatch:   # permite rodar manualmente
+  # Sync para o Supabase DESLIGADA (2026-06-10) — ver nota em supabase_sync.push_new.
+  # news-hunter é o único alimentador do web dashboard. Cron removido; push_new é
+  # no-op sem CLIPINATOR_SUPABASE_SYNC=1. workflow_dispatch mantido p/ uso manual.
+  workflow_dispatch:
 
 jobs:
   sync:

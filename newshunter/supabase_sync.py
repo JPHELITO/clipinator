@@ -102,8 +102,17 @@ def push_new(articles: list["Article"]) -> int:
     """Helper de alto nivel: pega o sink e envia. Usado por store.upsert_articles.
 
     Envelopado em try/except — nunca aborta o pipeline local.
+
+    SYNC DESLIGADA (2026-06-10): o news-hunter (repo separado) passou a ser o
+    ÚNICO alimentador da tabela `news_articles` no Supabase do web dashboard
+    (IBBA-Research-Dashboard). O Clipinator segue 100% funcional em modo local
+    (SQLite + clipping Word + leitor in-dash) — só parou de escrever na tabela
+    compartilhada, que tinha dois pipelines concorrentes (causava ruído/duplicidade).
+    Para REATIVAR a sync, defina a env var CLIPINATOR_SUPABASE_SYNC=1.
     """
     if not articles:
+        return 0
+    if os.environ.get("CLIPINATOR_SUPABASE_SYNC") != "1":
         return 0
     try:
         return get_sink().push(articles)

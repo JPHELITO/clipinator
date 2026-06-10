@@ -4,9 +4,11 @@ name: News Sync — Fast (5 min)
 # Minutos GitHub Actions por mês: ~288 runs/dia × ~0.5 min = ~4.320 min/mês.
 
 on:
-  schedule:
-    - cron: "*/5 * * * *"
-  workflow_dispatch:   # permite rodar manualmente
+  # Sync para o Supabase DESLIGADA (2026-06-10): o news-hunter (repo separado) é o
+  # ÚNICO alimentador da tabela news_articles do web dashboard. Cron removido para
+  # não rodar à toa (push_new vira no-op sem CLIPINATOR_SUPABASE_SYNC=1).
+  # workflow_dispatch mantido para execução manual caso a sync seja reativada.
+  workflow_dispatch:
 
 jobs:
   sync:
